@@ -29,25 +29,30 @@ type LogConfig struct {
 
 // DNSConfig DNS 配置
 type DNSConfig struct {
-	Servers []DNSServer `json:"servers,omitempty"`
-	Rules   []DNSRule   `json:"rules,omitempty"`
-	Final   string      `json:"final,omitempty"`
+	Strategy         string      `json:"strategy,omitempty"`
+	Servers          []DNSServer `json:"servers,omitempty"`
+	Rules            []DNSRule   `json:"rules,omitempty"`
+	Final            string      `json:"final,omitempty"`
+	IndependentCache bool        `json:"independent_cache,omitempty"`
 }
 
-// DNSServer DNS 服务器
+// DNSServer DNS 服务器 (新格式，支持 FakeIP)
 type DNSServer struct {
-	Tag            string `json:"tag"`
-	Address        string `json:"address"`
-	AddressResolver string `json:"address_resolver,omitempty"`
-	Detour         string `json:"detour,omitempty"`
+	Tag        string `json:"tag"`
+	Type       string `json:"type"`                   // udp, tcp, https, tls, quic, h3, fakeip, rcode
+	Server     string `json:"server,omitempty"`       // 服务器地址
+	Detour     string `json:"detour,omitempty"`       // 出站代理
+	Inet4Range string `json:"inet4_range,omitempty"`  // FakeIP IPv4 地址池
+	Inet6Range string `json:"inet6_range,omitempty"`  // FakeIP IPv6 地址池
 }
 
 // DNSRule DNS 规则
 type DNSRule struct {
+	Outbound  string   `json:"outbound,omitempty"`   // 匹配出站的 DNS 查询，如 "any" 表示代理服务器地址解析
 	RuleSet   []string `json:"rule_set,omitempty"`
 	QueryType []string `json:"query_type,omitempty"`
 	Server    string   `json:"server,omitempty"`
-	Outbound  string   `json:"outbound,omitempty"`
+	Action    string   `json:"action,omitempty"` // route, reject 等
 }
 
 // NTPConfig NTP 配置
@@ -110,8 +115,9 @@ type ClashAPIConfig struct {
 
 // CacheFileConfig 缓存文件配置
 type CacheFileConfig struct {
-	Enabled bool   `json:"enabled"`
-	Path    string `json:"path,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	Path        string `json:"path,omitempty"`
+	StoreFakeIP bool   `json:"store_fakeip,omitempty"` // 持久化 FakeIP 映射
 }
 
 // ConfigBuilder 配置生成器
@@ -179,43 +185,50 @@ func (b *ConfigBuilder) buildLog() *LogConfig {
 // buildDNS 构建 DNS 配置
 func (b *ConfigBuilder) buildDNS() *DNSConfig {
 	return &DNSConfig{
+		Strategy: "prefer_ipv4",
 		Servers: []DNSServer{
 			{
-				Tag:            "dns_proxy",
-				Address:        b.settings.ProxyDNS,
-				AddressResolver: "dns_resolver",
-				Detour:         "Proxy",
+				Tag:    "dns_proxy",
+				Type:   "https",
+				Server: "8.8.8.8",
+				Detour: "Proxy",
 			},
 			{
-				Tag:            "dns_direct",
-				Address:        b.settings.DirectDNS,
-				AddressResolver: "dns_resolver",
-				Detour:         "DIRECT",
+				Tag:    "dns_direct",
+				Type:   "udp",
+				Server: "223.5.5.5",
 			},
 			{
-				Tag:     "dns_resolver",
-				Address: "223.5.5.5",
-			},
-			{
-				Tag:     "dns_block",
-				Address: "rcode://success",
+				Tag:        "dns_fakeip",
+				Type:       "fakeip",
+				Inet4Range: "198.18.0.0/15",
+				Inet6Range: "fc00::/18",
 			},
 		},
 		Rules: []DNSRule{
 			{
+				// 关键规则：代理服务器地址解析走直连，避免 DNS 循环
+				Outbound: "any",
+				Server:   "dns_direct",
+				Action:   "route",
+			},
+			{
 				RuleSet: []string{"geosite-category-ads-all"},
-				Server:  "dns_block",
+				Action:  "reject",
 			},
 			{
 				RuleSet: []string{"geosite-geolocation-cn"},
 				Server:  "dns_direct",
+				Action:  "route",
 			},
 			{
-				RuleSet: []string{"geosite-geolocation-!cn"},
-				Server:  "dns_proxy",
+				QueryType: []string{"A", "AAAA"},
+				Server:    "dns_fakeip",
+				Action:    "route",
 			},
 		},
-		Final: "dns_direct",
+		Final:            "dns_proxy",
+		IndependentCache: true,
 	}
 }
 
@@ -261,7 +274,7 @@ func (b *ConfigBuilder) buildOutbounds() []Outbound {
 	outbounds := []Outbound{
 		{"type": "direct", "tag": "DIRECT"},
 		{"type": "block", "tag": "REJECT"},
-		{"type": "dns", "tag": "dns-out"},
+		// 移除 dns-out，改用路由 action: hijack-dns
 	}
 
 	// 收集所有节点标签和按国家分组
@@ -537,10 +550,17 @@ func (b *ConfigBuilder) buildRoute() *RouteConfig {
 	// 构建路由规则
 	var rules []RouteRule
 
-	// DNS 劫持规则
+	// 1. 添加 sniff action（嗅探流量类型，配合 FakeIP 使用）
+	rules = append(rules, RouteRule{
+		"action":  "sniff",
+		"sniffer": []string{"dns", "http", "tls", "quic"},
+		"timeout": "500ms",
+	})
+
+	// 2. DNS 劫持使用 action（替代已弃用的 dns-out）
 	rules = append(rules, RouteRule{
 		"protocol": "dns",
-		"outbound": "dns-out",
+		"action":   "hijack-dns",
 	})
 
 	// 按优先级排序自定义规则
@@ -630,12 +650,13 @@ func (b *ConfigBuilder) buildExperimental() *ExperimentalConfig {
 		ClashAPI: &ClashAPIConfig{
 			ExternalController:    fmt.Sprintf("127.0.0.1:%d", b.settings.ClashAPIPort),
 			ExternalUI:            b.settings.ClashUIPath,
-			ExternalUIDownloadURL: "https://github.com/Zephyruso/zashboard/archive/refs/heads/gh-pages.zip",
+			ExternalUIDownloadURL: "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip",
 			DefaultMode:           "rule",
 		},
 		CacheFile: &CacheFileConfig{
-			Enabled: true,
-			Path:    "cache.db",
+			Enabled:     true,
+			Path:        "cache.db",
+			StoreFakeIP: true, // 持久化 FakeIP 映射，避免重启后地址变化
 		},
 	}
 }
