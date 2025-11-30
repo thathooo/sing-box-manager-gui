@@ -154,10 +154,15 @@ func (p *VmessParser) Parse(rawURL string) (*storage.Node, error) {
 		tls := map[string]interface{}{
 			"enabled": true,
 		}
+		// 设置 server_name（按优先级：SNI > Host > 服务器地址）
 		if config.SNI != "" {
 			tls["server_name"] = config.SNI
 		} else if config.Host != "" {
 			tls["server_name"] = config.Host
+		} else {
+			// 如果 SNI 和 Host 都为空，使用服务器地址作为默认 server_name
+			// 这是为了确保 TLS 握手时有正确的 SNI
+			tls["server_name"] = config.Add
 		}
 		if config.Skip {
 			tls["insecure"] = true

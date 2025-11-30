@@ -28,6 +28,7 @@ type ClashProxy struct {
 	TLS            bool                   `yaml:"tls,omitempty"`
 	SkipCertVerify bool                   `yaml:"skip-cert-verify,omitempty"`
 	SNI            string                 `yaml:"sni,omitempty"`
+	Servername     string                 `yaml:"servername,omitempty"` // Clash 格式的 SNI 字段
 	ALPN           []string               `yaml:"alpn,omitempty"`
 	Fingerprint    string                 `yaml:"fingerprint,omitempty"`
 	Flow           string                 `yaml:"flow,omitempty"`
@@ -240,8 +241,14 @@ func convertClashProxy(proxy ClashProxy) (*storage.Node, error) {
 			"enabled": true,
 		}
 
+		// 设置 server_name（按优先级：SNI > Servername > 服务器地址）
 		if proxy.SNI != "" {
 			tls["server_name"] = proxy.SNI
+		} else if proxy.Servername != "" {
+			tls["server_name"] = proxy.Servername
+		} else {
+			// 回退到服务器地址，确保 TLS 握手有正确的 SNI
+			tls["server_name"] = proxy.Server
 		}
 
 		if proxy.SkipCertVerify {
