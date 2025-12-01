@@ -41,6 +41,7 @@ export const ruleGroupApi = {
 export const settingsApi = {
   get: () => api.get('/settings'),
   update: (data: any) => api.put('/settings', data),
+  getSystemHosts: () => api.get('/system-hosts'),
 };
 
 // 配置 API

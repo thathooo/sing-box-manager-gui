@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef } from 'react';
-import { Card, CardBody, CardHeader, Input, Button, Switch, Chip, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Select, SelectItem, Progress } from '@nextui-org/react';
-import { Save, Download, Upload, Terminal, CheckCircle, AlertCircle } from 'lucide-react';
+import { Card, CardBody, CardHeader, Input, Button, Switch, Chip, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Select, SelectItem, Progress, Textarea, useDisclosure } from '@nextui-org/react';
+import { Save, Download, Upload, Terminal, CheckCircle, AlertCircle, Plus, Pencil, Trash2, Server } from 'lucide-react';
 import { useStore } from '../store';
-import type { Settings as SettingsType } from '../store';
-import { launchdApi, kernelApi } from '../api';
+import type { Settings as SettingsType, HostEntry } from '../store';
+import { launchdApi, kernelApi, settingsApi } from '../api';
 import { toast } from '../components/Toast';
 
 // 内核信息类型
@@ -44,10 +44,18 @@ export default function Settings() {
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Hosts 相关状态
+  const [systemHosts, setSystemHosts] = useState<HostEntry[]>([]);
+  const { isOpen: isHostModalOpen, onOpen: onHostModalOpen, onClose: onHostModalClose } = useDisclosure();
+  const [editingHost, setEditingHost] = useState<HostEntry | null>(null);
+  const [hostFormData, setHostFormData] = useState({ domain: '', enabled: true });
+  const [ipsText, setIpsText] = useState('');
+
   useEffect(() => {
     fetchSettings();
     fetchLaunchdStatus();
     fetchKernelInfo();
+    fetchSystemHosts();
   }, []);
 
   useEffect(() => {
@@ -72,6 +80,98 @@ export default function Settings() {
     } catch (error) {
       console.error('获取内核信息失败:', error);
     }
+  };
+
+  const fetchSystemHosts = async () => {
+    try {
+      const res = await settingsApi.getSystemHosts();
+      setSystemHosts(res.data.data || []);
+    } catch (error) {
+      console.error('获取系统 hosts 失败:', error);
+    }
+  };
+
+  // Hosts 处理函数
+  const handleAddHost = () => {
+    setEditingHost(null);
+    setHostFormData({ domain: '', enabled: true });
+    setIpsText('');
+    onHostModalOpen();
+  };
+
+  const handleEditHost = (host: HostEntry) => {
+    setEditingHost(host);
+    setHostFormData({ domain: host.domain, enabled: host.enabled });
+    setIpsText(host.ips.join('\n'));
+    onHostModalOpen();
+  };
+
+  const handleDeleteHost = (id: string) => {
+    if (!formData?.hosts) return;
+    setFormData({
+      ...formData,
+      hosts: formData.hosts.filter(h => h.id !== id)
+    });
+  };
+
+  const handleToggleHost = (id: string, enabled: boolean) => {
+    if (!formData?.hosts) return;
+    setFormData({
+      ...formData,
+      hosts: formData.hosts.map(h => h.id === id ? { ...h, enabled } : h)
+    });
+  };
+
+  const handleSubmitHost = () => {
+    const ips = ipsText.split('\n').map(ip => ip.trim()).filter(ip => ip);
+
+    // 验证 IP 格式
+    const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
+    const ipv6Regex = /^([a-fA-F0-9:]+)$/;
+    const invalidIps = ips.filter(ip => !ipv4Regex.test(ip) && !ipv6Regex.test(ip));
+    if (invalidIps.length > 0) {
+      toast.error(`无效的 IP 地址: ${invalidIps.join(', ')}`);
+      return;
+    }
+
+    // 验证域名格式
+    const domainRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/;
+    if (!domainRegex.test(hostFormData.domain)) {
+      toast.error('无效的域名格式');
+      return;
+    }
+
+    if (ips.length === 0) {
+      toast.error('请输入至少一个 IP 地址');
+      return;
+    }
+
+    const hosts = formData?.hosts || [];
+
+    if (editingHost) {
+      // 编辑模式
+      setFormData({
+        ...formData!,
+        hosts: hosts.map(h => h.id === editingHost.id
+          ? { ...h, domain: hostFormData.domain, ips, enabled: hostFormData.enabled }
+          : h
+        )
+      });
+    } else {
+      // 新增模式
+      const newHost: HostEntry = {
+        id: crypto.randomUUID(),
+        domain: hostFormData.domain,
+        ips,
+        enabled: hostFormData.enabled,
+      };
+      setFormData({
+        ...formData!,
+        hosts: [...hosts, newHost]
+      });
+    }
+
+    onHostModalClose();
   };
 
   const fetchLaunchdStatus = async () => {
@@ -257,7 +357,7 @@ export default function Settings() {
 
           <Input
             label="配置文件路径"
-            placeholder="data/generated/config.json"
+            placeholder="generated/config.json"
             value={formData.config_path}
             onChange={(e) => setFormData({ ...formData, config_path: e.target.value })}
           />
@@ -317,6 +417,96 @@ export default function Settings() {
             value={formData.direct_dns}
             onChange={(e) => setFormData({ ...formData, direct_dns: e.target.value })}
           />
+
+          {/* Hosts 映射 */}
+          <div className="mt-6 pt-4 border-t border-divider">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <h3 className="font-medium">Hosts 映射</h3>
+                <p className="text-sm text-gray-500">自定义域名解析（仅对 Sing-Box 生效）</p>
+              </div>
+              <Button
+                color="primary"
+                size="sm"
+                startContent={<Plus className="w-4 h-4" />}
+                onPress={handleAddHost}
+              >
+                添加
+              </Button>
+            </div>
+
+            {/* 用户自定义 hosts */}
+            {formData.hosts && formData.hosts.length > 0 && (
+              <div className="mb-4">
+                <p className="text-sm text-gray-500 mb-2">自定义映射</p>
+                {formData.hosts.map((host) => (
+                  <div
+                    key={host.id}
+                    className="flex items-center justify-between p-3 bg-default-100 rounded-lg mb-2"
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <Server className="w-4 h-4 text-gray-500" />
+                        <span className="font-medium">{host.domain}</span>
+                        {!host.enabled && <Chip size="sm" variant="flat">已禁用</Chip>}
+                      </div>
+                      <div className="flex gap-1 mt-1 flex-wrap">
+                        {host.ips.map((ip, idx) => (
+                          <Chip key={idx} size="sm" variant="bordered">{ip}</Chip>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button isIconOnly size="sm" variant="light" onPress={() => handleEditHost(host)}>
+                        <Pencil className="w-4 h-4" />
+                      </Button>
+                      <Button isIconOnly size="sm" variant="light" color="danger" onPress={() => handleDeleteHost(host.id)}>
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                      <Switch
+                        size="sm"
+                        isSelected={host.enabled}
+                        onValueChange={(enabled) => handleToggleHost(host.id, enabled)}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 系统 hosts（只读） */}
+            {systemHosts.length > 0 && (
+              <div>
+                <p className="text-sm text-gray-500 mb-2">
+                  系统 hosts <Chip size="sm" variant="flat">只读</Chip>
+                </p>
+                {systemHosts.map((host) => (
+                  <div
+                    key={host.id}
+                    className="flex items-center justify-between p-3 bg-default-100 rounded-lg mb-2"
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <Server className="w-4 h-4 text-gray-500" />
+                        <span className="font-medium">{host.domain}</span>
+                        <Chip size="sm" color="secondary" variant="flat">系统</Chip>
+                      </div>
+                      <div className="flex gap-1 mt-1 flex-wrap">
+                        {host.ips.map((ip, idx) => (
+                          <Chip key={idx} size="sm" variant="bordered">{ip}</Chip>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 空状态 */}
+            {(!formData.hosts || formData.hosts.length === 0) && systemHosts.length === 0 && (
+              <p className="text-gray-500 text-center py-4">暂无 hosts 映射</p>
+            )}
+          </div>
         </CardBody>
       </Card>
 
@@ -480,6 +670,45 @@ export default function Settings() {
               isDisabled={!selectedVersion || downloading}
             >
               开始下载
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* Hosts 编辑弹窗 */}
+      <Modal isOpen={isHostModalOpen} onClose={onHostModalClose}>
+        <ModalContent>
+          <ModalHeader>{editingHost ? '编辑 Host' : '添加 Host'}</ModalHeader>
+          <ModalBody className="gap-4">
+            <Input
+              label="域名"
+              placeholder="例如：example.com"
+              value={hostFormData.domain}
+              onChange={(e) => setHostFormData({ ...hostFormData, domain: e.target.value })}
+            />
+            <Textarea
+              label="IP 地址"
+              placeholder={"每行一个 IP 地址\n例如：\n192.168.1.1\n192.168.1.2"}
+              value={ipsText}
+              onChange={(e) => setIpsText(e.target.value)}
+              minRows={3}
+            />
+            <div className="flex items-center justify-between">
+              <span>启用</span>
+              <Switch
+                isSelected={hostFormData.enabled}
+                onValueChange={(enabled) => setHostFormData({ ...hostFormData, enabled })}
+              />
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="flat" onPress={onHostModalClose}>取消</Button>
+            <Button
+              color="primary"
+              onPress={handleSubmitHost}
+              isDisabled={!hostFormData.domain || !ipsText.trim()}
+            >
+              {editingHost ? '保存' : '添加'}
             </Button>
           </ModalFooter>
         </ModalContent>

@@ -3,6 +3,7 @@ package builder
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -36,14 +37,15 @@ type DNSConfig struct {
 	IndependentCache bool        `json:"independent_cache,omitempty"`
 }
 
-// DNSServer DNS 服务器 (新格式，支持 FakeIP)
+// DNSServer DNS 服务器 (新格式，支持 FakeIP 和 hosts)
 type DNSServer struct {
-	Tag        string `json:"tag"`
-	Type       string `json:"type"`                   // udp, tcp, https, tls, quic, h3, fakeip, rcode
-	Server     string `json:"server,omitempty"`       // 服务器地址
-	Detour     string `json:"detour,omitempty"`       // 出站代理
-	Inet4Range string `json:"inet4_range,omitempty"`  // FakeIP IPv4 地址池
-	Inet6Range string `json:"inet6_range,omitempty"`  // FakeIP IPv6 地址池
+	Tag        string         `json:"tag"`
+	Type       string         `json:"type"`                   // udp, tcp, https, tls, quic, h3, fakeip, rcode, hosts
+	Server     string         `json:"server,omitempty"`       // 服务器地址
+	Detour     string         `json:"detour,omitempty"`       // 出站代理
+	Inet4Range string         `json:"inet4_range,omitempty"`  // FakeIP IPv4 地址池
+	Inet6Range string         `json:"inet6_range,omitempty"`  // FakeIP IPv6 地址池
+	Predefined map[string]any `json:"predefined,omitempty"`   // hosts 类型专用：预定义域名映射
 }
 
 // DNSRule DNS 规则
@@ -51,8 +53,9 @@ type DNSRule struct {
 	Outbound  string   `json:"outbound,omitempty"`   // 匹配出站的 DNS 查询，如 "any" 表示代理服务器地址解析
 	RuleSet   []string `json:"rule_set,omitempty"`
 	QueryType []string `json:"query_type,omitempty"`
+	Domain    []string `json:"domain,omitempty"`     // 完整域名匹配
 	Server    string   `json:"server,omitempty"`
-	Action    string   `json:"action,omitempty"` // route, reject 等
+	Action    string   `json:"action,omitempty"`     // route, reject 等
 }
 
 // NTPConfig NTP 配置
@@ -189,46 +192,141 @@ func (b *ConfigBuilder) buildLog() *LogConfig {
 	}
 }
 
+// ParseSystemHosts 解析系统 /etc/hosts 文件
+func ParseSystemHosts() map[string][]string {
+	hosts := make(map[string][]string)
+
+	data, err := os.ReadFile("/etc/hosts")
+	if err != nil {
+		return hosts
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// 跳过空行和注释
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// 去除行内注释
+		if idx := strings.Index(line, "#"); idx != -1 {
+			line = line[:idx]
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		ip := fields[0]
+		// 跳过 localhost 相关条目
+		for _, domain := range fields[1:] {
+			if domain == "localhost" || strings.HasSuffix(domain, ".localhost") {
+				continue
+			}
+			hosts[domain] = append(hosts[domain], ip)
+		}
+	}
+
+	return hosts
+}
+
 // buildDNS 构建 DNS 配置
 func (b *ConfigBuilder) buildDNS() *DNSConfig {
+	// 基础 DNS 服务器
+	servers := []DNSServer{
+		{
+			Tag:    "dns_proxy",
+			Type:   "https",
+			Server: "8.8.8.8",
+			Detour: "Proxy",
+		},
+		{
+			Tag:    "dns_direct",
+			Type:   "udp",
+			Server: "223.5.5.5",
+		},
+		{
+			Tag:        "dns_fakeip",
+			Type:       "fakeip",
+			Inet4Range: "198.18.0.0/15",
+			Inet6Range: "fc00::/18",
+		},
+	}
+
+	// 基础 DNS 规则
+	rules := []DNSRule{
+		{
+			RuleSet: []string{"geosite-category-ads-all"},
+			Action:  "reject",
+		},
+		{
+			RuleSet: []string{"geosite-geolocation-cn"},
+			Server:  "dns_direct",
+			Action:  "route",
+		},
+		{
+			QueryType: []string{"A", "AAAA"},
+			Server:    "dns_fakeip",
+			Action:    "route",
+		},
+	}
+
+	// 1. 读取系统 hosts
+	systemHosts := ParseSystemHosts()
+
+	// 2. 收集用户自定义 hosts（用户优先，会覆盖系统 hosts）
+	predefined := make(map[string]any)
+	var domains []string
+
+	// 先添加系统 hosts
+	for domain, ips := range systemHosts {
+		if len(ips) == 1 {
+			predefined[domain] = ips[0]
+		} else {
+			predefined[domain] = ips
+		}
+		domains = append(domains, domain)
+	}
+
+	// 再添加用户 hosts（覆盖同名系统 hosts）
+	for _, host := range b.settings.Hosts {
+		if host.Enabled && host.Domain != "" && len(host.IPs) > 0 {
+			if len(host.IPs) == 1 {
+				predefined[host.Domain] = host.IPs[0]
+			} else {
+				predefined[host.Domain] = host.IPs
+			}
+			// 如果是新域名，加入列表
+			if _, exists := systemHosts[host.Domain]; !exists {
+				domains = append(domains, host.Domain)
+			}
+		}
+	}
+
+	// 3. 如果有映射，添加 hosts 服务器和规则
+	if len(predefined) > 0 {
+		// 在服务器列表开头插入 hosts 服务器
+		hostsServer := DNSServer{
+			Tag:        "dns_hosts",
+			Type:       "hosts",
+			Predefined: predefined,
+		}
+		servers = append([]DNSServer{hostsServer}, servers...)
+
+		// 在规则列表开头插入 hosts 规则（优先匹配）
+		hostsRule := DNSRule{
+			Domain: domains,
+			Server: "dns_hosts",
+			Action: "route",
+		}
+		rules = append([]DNSRule{hostsRule}, rules...)
+	}
+
 	return &DNSConfig{
-		Strategy: "prefer_ipv4",
-		Servers: []DNSServer{
-			{
-				Tag:    "dns_proxy",
-				Type:   "https",
-				Server: "8.8.8.8",
-				Detour: "Proxy",
-			},
-			{
-				Tag:    "dns_direct",
-				Type:   "udp",
-				Server: "223.5.5.5",
-			},
-			{
-				Tag:        "dns_fakeip",
-				Type:       "fakeip",
-				Inet4Range: "198.18.0.0/15",
-				Inet6Range: "fc00::/18",
-			},
-		},
-		Rules: []DNSRule{
-			// 注意：outbound: "any" 规则已移除，改用 route.default_domain_resolver
-			{
-				RuleSet: []string{"geosite-category-ads-all"},
-				Action:  "reject",
-			},
-			{
-				RuleSet: []string{"geosite-geolocation-cn"},
-				Server:  "dns_direct",
-				Action:  "route",
-			},
-			{
-				QueryType: []string{"A", "AAAA"},
-				Server:    "dns_fakeip",
-				Action:    "route",
-			},
-		},
+		Strategy:         "prefer_ipv4",
+		Servers:          servers,
+		Rules:            rules,
 		Final:            "dns_proxy",
 		IndependentCache: true,
 	}

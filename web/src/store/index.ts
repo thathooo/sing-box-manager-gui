@@ -81,6 +81,13 @@ export interface RuleGroup {
   enabled: boolean;
 }
 
+export interface HostEntry {
+  id: string;
+  domain: string;
+  ips: string[];
+  enabled: boolean;
+}
+
 export interface Settings {
   singbox_path: string;
   config_path: string;
@@ -88,6 +95,7 @@ export interface Settings {
   tun_enabled: boolean;
   proxy_dns: string;
   direct_dns: string;
+  hosts?: HostEntry[];           // DNS hosts 映射
   web_port: number;
   clash_api_port: number;
   clash_ui_path: string;

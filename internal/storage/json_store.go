@@ -81,6 +81,20 @@ func (s *JSONStore) load() error {
 		s.data.RuleGroups = DefaultRuleGroups()
 	}
 
+	// 迁移旧的路径格式（移除多余的 data/ 前缀）
+	needSave := false
+	if s.data.Settings.SingBoxPath == "data/bin/sing-box" {
+		s.data.Settings.SingBoxPath = "bin/sing-box"
+		needSave = true
+	}
+	if s.data.Settings.ConfigPath == "data/generated/config.json" {
+		s.data.Settings.ConfigPath = "generated/config.json"
+		needSave = true
+	}
+	if needSave {
+		return s.saveInternal()
+	}
+
 	return nil
 }
 

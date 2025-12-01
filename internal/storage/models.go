@@ -91,6 +91,14 @@ type RuleGroup struct {
 	Enabled   bool     `json:"enabled"`
 }
 
+// HostEntry DNS hosts 映射条目
+type HostEntry struct {
+	ID      string   `json:"id"`
+	Domain  string   `json:"domain"` // 域名
+	IPs     []string `json:"ips"`    // IP 地址列表
+	Enabled bool     `json:"enabled"`
+}
+
 // Settings 全局设置
 type Settings struct {
 	// sing-box 路径
@@ -102,8 +110,9 @@ type Settings struct {
 	TunEnabled bool `json:"tun_enabled"` // TUN 模式
 
 	// DNS 配置
-	ProxyDNS  string `json:"proxy_dns"`  // 代理 DNS
-	DirectDNS string `json:"direct_dns"` // 直连 DNS
+	ProxyDNS  string      `json:"proxy_dns"`        // 代理 DNS
+	DirectDNS string      `json:"direct_dns"`       // 直连 DNS
+	Hosts     []HostEntry `json:"hosts,omitempty"`  // DNS hosts 映射
 
 	// 控制面板
 	WebPort      int    `json:"web_port"`       // 管理界面端口
@@ -127,8 +136,8 @@ type Settings struct {
 // DefaultSettings 默认设置
 func DefaultSettings() *Settings {
 	return &Settings{
-		SingBoxPath:          "data/bin/sing-box",
-		ConfigPath:           "data/generated/config.json",
+		SingBoxPath:          "bin/sing-box",
+		ConfigPath:           "generated/config.json",
 		MixedPort:            2080,
 		TunEnabled:           true,
 		ProxyDNS:             "https://1.1.1.1/dns-query",

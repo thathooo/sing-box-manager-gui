@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"text/template"
+	"time"
 )
 
 const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
@@ -178,10 +179,24 @@ func (lm *LaunchdManager) Stop() error {
 
 // Restart 重启服务
 func (lm *LaunchdManager) Restart() error {
-	if err := lm.Stop(); err != nil {
-		// 忽略停止错误
+	// 先停止服务（忽略错误，服务可能未运行）
+	lm.Stop()
+
+	// 等待短暂时间让服务完全停止
+	time.Sleep(500 * time.Millisecond)
+
+	// 尝试启动服务（忽略命令错误，因为 KeepAlive 可能已经自动重启）
+	exec.Command("launchctl", "start", lm.label).Run()
+
+	// 再等待一下让服务启动
+	time.Sleep(200 * time.Millisecond)
+
+	// 检查服务是否真正在运行
+	if !lm.IsRunning() {
+		return fmt.Errorf("服务重启失败：服务未运行")
 	}
-	return lm.Start()
+
+	return nil
 }
 
 // IsInstalled 检查是否已安装

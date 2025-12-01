@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -115,6 +116,9 @@ func (s *Server) setupRoutes() {
 		// 设置
 		api.GET("/settings", s.getSettings)
 		api.PUT("/settings", s.updateSettings)
+
+		// 系统 hosts
+		api.GET("/system-hosts", s.getSystemHosts)
 
 		// 配置生成
 		api.POST("/config/generate", s.generateConfig)
@@ -449,12 +453,30 @@ func (s *Server) updateSettings(c *gin.Context) {
 	}
 
 	// 更新进程管理器的配置路径（sing-box 路径是固定的，无需更新）
-	s.processManager.SetConfigPath(settings.ConfigPath)
+	s.processManager.SetConfigPath(s.resolvePath(settings.ConfigPath))
 
 	// 重启调度器（可能更新了定时间隔）
 	s.scheduler.Restart()
 
 	c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
+}
+
+// ==================== 系统 hosts API ====================
+
+func (s *Server) getSystemHosts(c *gin.Context) {
+	hosts := builder.ParseSystemHosts()
+
+	var entries []storage.HostEntry
+	for domain, ips := range hosts {
+		entries = append(entries, storage.HostEntry{
+			ID:      "system-" + domain,
+			Domain:  domain,
+			IPs:     ips,
+			Enabled: true,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": entries})
 }
 
 // ==================== 配置 API ====================
@@ -488,7 +510,7 @@ func (s *Server) applyConfig(c *gin.Context) {
 
 	// 保存配置文件
 	settings := s.store.GetSettings()
-	if err := s.saveConfigFile(settings.ConfigPath, configJSON); err != nil {
+	if err := s.saveConfigFile(s.resolvePath(settings.ConfigPath), configJSON); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -525,6 +547,14 @@ func (s *Server) saveConfigFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
+// resolvePath 将相对路径解析为基于数据目录的绝对路径
+func (s *Server) resolvePath(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(s.store.GetDataDir(), path)
+}
+
 // autoApplyConfig 自动应用配置（如果 sing-box 正在运行）
 func (s *Server) autoApplyConfig() error {
 	settings := s.store.GetSettings()
@@ -539,7 +569,7 @@ func (s *Server) autoApplyConfig() error {
 	}
 
 	// 保存配置文件
-	if err := s.saveConfigFile(settings.ConfigPath, configJSON); err != nil {
+	if err := s.saveConfigFile(s.resolvePath(settings.ConfigPath), configJSON); err != nil {
 		return err
 	}
 
