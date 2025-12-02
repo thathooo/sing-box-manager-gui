@@ -792,7 +792,19 @@ func (s *Server) getSystemInfo(c *gin.Context) {
 }
 
 func (s *Server) getLogs(c *gin.Context) {
-	logs := s.processManager.GetLogs()
+	lines := 200 // 默认返回 200 行
+	if linesParam := c.Query("lines"); linesParam != "" {
+		if n, err := strconv.Atoi(linesParam); err == nil && n > 0 {
+			lines = n
+		}
+	}
+
+	// 返回程序日志，不混合 sing-box 输出
+	logs, err := logger.ReadAppLogs(lines)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"data": logs})
 }
 

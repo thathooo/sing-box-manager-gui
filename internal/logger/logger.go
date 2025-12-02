@@ -152,6 +152,7 @@ func (l *Logger) Println(v ...interface{}) {
 }
 
 // WriteRaw 写入原始日志行（不添加时间戳，用于 sing-box 输出）
+// 只写入文件，不输出到控制台，避免和程序日志混在一起
 func (l *Logger) WriteRaw(line string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -168,9 +169,6 @@ func (l *Logger) WriteRaw(line string) {
 
 	n, _ := l.file.Write([]byte(data))
 	l.currentSize += int64(n)
-
-	// 同时输出到控制台
-	fmt.Print(data)
 }
 
 // Close 关闭日志文件
