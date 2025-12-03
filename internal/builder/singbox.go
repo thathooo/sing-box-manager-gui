@@ -151,6 +151,14 @@ func NewConfigBuilder(settings *storage.Settings, nodes []storage.Node, filters 
 	}
 }
 
+// buildRuleSetURL 构建规则集 URL（支持 GitHub 代理）
+func (b *ConfigBuilder) buildRuleSetURL(originalURL string) string {
+	if b.settings.GithubProxy != "" {
+		return b.settings.GithubProxy + originalURL
+	}
+	return originalURL
+}
+
 // Build 构建 sing-box 配置
 func (b *ConfigBuilder) Build() (*SingBoxConfig, error) {
 	config := &SingBoxConfig{
@@ -641,7 +649,7 @@ func (b *ConfigBuilder) buildRoute() *RouteConfig {
 					Tag:            tag,
 					Type:           "remote",
 					Format:         "binary",
-					URL:            fmt.Sprintf("%s/geosite-%s.srs", b.settings.RuleSetBaseURL, sr),
+					URL:            b.buildRuleSetURL(fmt.Sprintf("%s/geosite-%s.srs", b.settings.RuleSetBaseURL, sr)),
 					DownloadDetour: "DIRECT",
 				})
 			}
@@ -654,7 +662,7 @@ func (b *ConfigBuilder) buildRoute() *RouteConfig {
 					Tag:            tag,
 					Type:           "remote",
 					Format:         "binary",
-					URL:            fmt.Sprintf("%s/../rule-set-geoip/geoip-%s.srs", b.settings.RuleSetBaseURL, ir),
+					URL:            b.buildRuleSetURL(fmt.Sprintf("%s/../rule-set-geoip/geoip-%s.srs", b.settings.RuleSetBaseURL, ir)),
 					DownloadDetour: "DIRECT",
 				})
 			}
