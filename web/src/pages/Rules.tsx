@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Card,
   CardBody,
@@ -16,10 +16,20 @@ import {
   SelectItem,
   Textarea,
   useDisclosure,
+  Spinner,
 } from '@nextui-org/react';
-import { Shield, Globe, Tv, MessageCircle, Github, Bot, Apple, Monitor, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Shield, Globe, Tv, MessageCircle, Github, Bot, Apple, Monitor, Plus, Pencil, Trash2, CheckCircle, XCircle } from 'lucide-react';
 import { useStore } from '../store';
+import { ruleSetApi } from '../api';
 import type { Rule, RuleGroup } from '../store';
+
+// 规则集验证结果类型
+interface ValidationResult {
+  valid: boolean;
+  url: string;
+  tag: string;
+  message: string;
+}
 
 const iconMap: Record<string, React.ReactNode> = {
   'ad-block': <Shield className="w-5 h-5" />,
@@ -84,12 +94,94 @@ export default function Rules() {
   const [formData, setFormData] = useState<Omit<Rule, 'id'>>(defaultRule);
   const [valuesText, setValuesText] = useState('');
 
+  // 规则集验证状态
+  const [validationResults, setValidationResults] = useState<Record<string, ValidationResult>>({});
+  const [isValidating, setIsValidating] = useState(false);
+  const validationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     fetchRuleGroups();
     fetchRules();
     fetchFilters();
     fetchCountryGroups();
   }, []);
+
+  // 验证规则集（防抖）
+  const validateRuleSet = useCallback(async (type: 'geosite' | 'geoip', names: string[]) => {
+    if (names.length === 0) {
+      setValidationResults({});
+      return;
+    }
+
+    setIsValidating(true);
+    const results: Record<string, ValidationResult> = {};
+
+    for (const name of names) {
+      if (!name.trim()) continue;
+      try {
+        const response = await ruleSetApi.validate(type, name.trim());
+        results[name] = response.data;
+      } catch (error) {
+        results[name] = {
+          valid: false,
+          url: '',
+          tag: '',
+          message: '验证请求失败',
+        };
+      }
+    }
+
+    setValidationResults(results);
+    setIsValidating(false);
+  }, []);
+
+  // 当规则值改变时触发验证（防抖 500ms）
+  useEffect(() => {
+    if (formData.rule_type !== 'geosite' && formData.rule_type !== 'geoip') {
+      setValidationResults({});
+      return;
+    }
+
+    const names = valuesText
+      .split('\n')
+      .map((v) => v.trim())
+      .filter((v) => v);
+
+    if (names.length === 0) {
+      setValidationResults({});
+      return;
+    }
+
+    if (validationTimerRef.current) {
+      clearTimeout(validationTimerRef.current);
+    }
+
+    validationTimerRef.current = setTimeout(() => {
+      validateRuleSet(formData.rule_type as 'geosite' | 'geoip', names);
+    }, 500);
+
+    return () => {
+      if (validationTimerRef.current) {
+        clearTimeout(validationTimerRef.current);
+      }
+    };
+  }, [valuesText, formData.rule_type, validateRuleSet]);
+
+  // 检查是否所有规则集都验证通过
+  const allValidationsPassed = useCallback(() => {
+    if (formData.rule_type !== 'geosite' && formData.rule_type !== 'geoip') {
+      return true;
+    }
+
+    const names = valuesText
+      .split('\n')
+      .map((v) => v.trim())
+      .filter((v) => v);
+
+    if (names.length === 0) return false;
+
+    return names.every((name) => validationResults[name]?.valid);
+  }, [formData.rule_type, valuesText, validationResults]);
 
   // 获取所有可用的出站选项（包括国家节点组和过滤器）
   const getAllOutboundOptions = () => {
@@ -123,6 +215,7 @@ export default function Rules() {
     setEditingRule(null);
     setFormData(defaultRule);
     setValuesText('');
+    setValidationResults({});
     onOpen();
   };
 
@@ -137,6 +230,7 @@ export default function Rules() {
       priority: rule.priority,
     });
     setValuesText(rule.values.join('\n'));
+    setValidationResults({});
     onOpen();
   };
 
@@ -359,13 +453,58 @@ export default function Rules() {
                     : formData.rule_type === 'ip_cidr'
                     ? '每行一个 IP 段，例如：\n192.168.0.0/16\n10.0.0.0/8'
                     : formData.rule_type === 'geosite'
-                    ? '每行一个 geosite 规则集名称，例如：\ngoogle\nyoutube'
+                    ? '每行一个 geosite 规则集名称，例如：\ngoogle\nyoutube\ncursor'
+                    : formData.rule_type === 'geoip'
+                    ? '每行一个 geoip 规则集名称，例如：\ncn\ngoogle'
                     : '每行一个值'
                 }
                 value={valuesText}
                 onChange={(e) => setValuesText(e.target.value)}
                 minRows={4}
               />
+
+              {/* 规则集验证结果显示 */}
+              {(formData.rule_type === 'geosite' || formData.rule_type === 'geoip') && valuesText.trim() && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                    <span>规则集验证结果</span>
+                    {isValidating && <Spinner size="sm" />}
+                  </div>
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {valuesText
+                      .split('\n')
+                      .map((v) => v.trim())
+                      .filter((v) => v)
+                      .map((name) => {
+                        const result = validationResults[name];
+                        if (!result) {
+                          return (
+                            <div key={name} className="flex items-center gap-2 text-sm text-gray-500">
+                              <Spinner size="sm" />
+                              <span>{name} - 验证中...</span>
+                            </div>
+                          );
+                        }
+                        return (
+                          <div
+                            key={name}
+                            className={`flex items-center gap-2 text-sm ${
+                              result.valid ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                            }`}
+                          >
+                            {result.valid ? (
+                              <CheckCircle className="w-4 h-4" />
+                            ) : (
+                              <XCircle className="w-4 h-4" />
+                            )}
+                            <span className="font-medium">{name}</span>
+                            <span className="text-xs opacity-75">- {result.message}</span>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
 
               <Select
                 label="出站"
@@ -402,7 +541,11 @@ export default function Rules() {
             <Button variant="flat" onPress={onClose}>
               取消
             </Button>
-            <Button color="primary" onPress={handleSubmit} isDisabled={!formData.name || !valuesText.trim()}>
+            <Button
+              color="primary"
+              onPress={handleSubmit}
+              isDisabled={!formData.name || !valuesText.trim() || isValidating || !allValidationsPassed()}
+            >
               {editingRule ? '保存' : '添加'}
             </Button>
           </ModalFooter>

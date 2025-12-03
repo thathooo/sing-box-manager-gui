@@ -37,6 +37,12 @@ export const ruleGroupApi = {
   update: (id: string, data: any) => api.put(`/rule-groups/${id}`, data),
 };
 
+// 规则集验证 API
+export const ruleSetApi = {
+  validate: (type: 'geosite' | 'geoip', name: string) =>
+    api.get('/ruleset/validate', { params: { type, name } }),
+};
+
 // 设置 API
 export const settingsApi = {
   get: () => api.get('/settings'),

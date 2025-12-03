@@ -115,6 +115,9 @@ func (s *Server) setupRoutes() {
 		api.GET("/rule-groups", s.getRuleGroups)
 		api.PUT("/rule-groups/:id", s.updateRuleGroup)
 
+		// 规则集验证
+		api.GET("/ruleset/validate", s.validateRuleSet)
+
 		// 设置
 		api.GET("/settings", s.getSettings)
 		api.PUT("/settings", s.updateSettings)
@@ -433,6 +436,74 @@ func (s *Server) updateRuleGroup(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
+}
+
+// ==================== 规则集验证 API ====================
+
+func (s *Server) validateRuleSet(c *gin.Context) {
+	ruleType := c.Query("type") // geosite 或 geoip
+	name := c.Query("name")     // 规则集名称
+
+	if ruleType == "" || name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数 type 和 name 是必需的"})
+		return
+	}
+
+	if ruleType != "geosite" && ruleType != "geoip" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "type 必须是 geosite 或 geoip"})
+		return
+	}
+
+	settings := s.store.GetSettings()
+	var url string
+	var tag string
+
+	if ruleType == "geosite" {
+		tag = "geosite-" + name
+		url = settings.RuleSetBaseURL + "/geosite-" + name + ".srs"
+	} else {
+		tag = "geoip-" + name
+		// geoip 使用相对路径
+		url = settings.RuleSetBaseURL + "/../rule-set-geoip/geoip-" + name + ".srs"
+	}
+
+	// 如果配置了 GitHub 代理，添加代理前缀
+	if settings.GithubProxy != "" {
+		url = settings.GithubProxy + url
+	}
+
+	// 发送 HEAD 请求检查文件是否存在
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Head(url)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"valid":   false,
+			"url":     url,
+			"tag":     tag,
+			"message": "无法访问规则集: " + err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		c.JSON(http.StatusOK, gin.H{
+			"valid":   true,
+			"url":     url,
+			"tag":     tag,
+			"message": "规则集存在",
+		})
+	} else {
+		c.JSON(http.StatusOK, gin.H{
+			"valid":   false,
+			"url":     url,
+			"tag":     tag,
+			"message": "规则集不存在 (HTTP " + strconv.Itoa(resp.StatusCode) + ")",
+		})
+	}
 }
 
 // ==================== 设置 API ====================

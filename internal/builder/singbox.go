@@ -669,6 +669,42 @@ func (b *ConfigBuilder) buildRoute() *RouteConfig {
 		}
 	}
 
+	// 从自定义规则收集需要的规则集
+	for _, rule := range b.rules {
+		if !rule.Enabled {
+			continue
+		}
+		if rule.RuleType == "geosite" {
+			for _, v := range rule.Values {
+				tag := fmt.Sprintf("geosite-%s", v)
+				if !ruleSetMap[tag] {
+					ruleSetMap[tag] = true
+					ruleSets = append(ruleSets, RuleSet{
+						Tag:            tag,
+						Type:           "remote",
+						Format:         "binary",
+						URL:            b.buildRuleSetURL(fmt.Sprintf("%s/geosite-%s.srs", b.settings.RuleSetBaseURL, v)),
+						DownloadDetour: "DIRECT",
+					})
+				}
+			}
+		} else if rule.RuleType == "geoip" {
+			for _, v := range rule.Values {
+				tag := fmt.Sprintf("geoip-%s", v)
+				if !ruleSetMap[tag] {
+					ruleSetMap[tag] = true
+					ruleSets = append(ruleSets, RuleSet{
+						Tag:            tag,
+						Type:           "remote",
+						Format:         "binary",
+						URL:            b.buildRuleSetURL(fmt.Sprintf("%s/../rule-set-geoip/geoip-%s.srs", b.settings.RuleSetBaseURL, v)),
+						DownloadDetour: "DIRECT",
+					})
+				}
+			}
+		}
+	}
+
 	route.RuleSet = ruleSets
 
 	// 构建路由规则
