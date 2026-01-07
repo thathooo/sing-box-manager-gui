@@ -566,11 +566,14 @@ func (s *Server) getSettings(c *gin.Context) {
 }
 
 func (s *Server) updateSettings(c *gin.Context) {
+	oldSettings := s.store.GetSettings()
 	var settings storage.Settings
 	if err := c.ShouldBindJSON(&settings); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	allowLanEnabled := !oldSettings.AllowLAN && settings.AllowLAN
 
 	if err := s.store.UpdateSettings(&settings); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -582,6 +585,27 @@ func (s *Server) updateSettings(c *gin.Context) {
 
 	// 重启调度器（可能更新了定时间隔）
 	s.scheduler.Restart()
+
+	if allowLanEnabled {
+		configJSON, err := s.buildConfig()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		if err := s.saveConfigFile(s.resolvePath(settings.ConfigPath), configJSON); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		if err := s.processManager.Restart(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "更新成功，已启用局域网访问并重启服务（即使 AutoApply 关闭也会重启）"})
+		return
+	}
 
 	// 自动应用配置
 	if err := s.autoApplyConfig(); err != nil {
