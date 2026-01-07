@@ -395,6 +395,16 @@ export default function Settings() {
               onValueChange={(enabled) => setFormData({ ...formData, tun_enabled: enabled })}
             />
           </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium">允许局域网</p>
+              <p className="text-sm text-gray-500">将本地监听地址改为 0.0.0.0，允许局域网访问</p>
+            </div>
+            <Switch
+              isSelected={formData.allow_lan}
+              onValueChange={(enabled) => setFormData({ ...formData, allow_lan: enabled })}
+            />
+          </div>
         </CardBody>
       </Card>
 

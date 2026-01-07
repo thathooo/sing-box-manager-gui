@@ -93,6 +93,7 @@ export interface Settings {
   config_path: string;
   mixed_port: number;
   tun_enabled: boolean;
+  allow_lan: boolean;
   proxy_dns: string;
   direct_dns: string;
   hosts?: HostEntry[];           // DNS hosts 映射
